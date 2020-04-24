@@ -11,8 +11,10 @@ struct HashMap {
     const std::vector<upcxx::atomic_op> atomic_ops = {upcxx::atomic_op::compare_exchange, upcxx::atomic_op::fetch_add};
     upcxx::atomic_domain<int>* ad = new upcxx::atomic_domain<int>(atomic_ops);
     size_t my_size;
-    kmer_pair local_cache[upcxx::rank_n()][S];
-    int local_cache_pointer[upcxx::rank_n()] = {0};
+    kmer_pair *local_cache;
+    int *local_cache_pointer;
+    upcxx::global_ptr<kmer_pair> local_stack;
+    upcxx::global_ptr<int> local_stack_pointer;
     std::vector<upcxx::global_ptr<kmer_pair>> stack;
     std::vector<upcxx::global_ptr<int>> stack_pointer;
 
@@ -24,7 +26,7 @@ struct HashMap {
 
     // Most important functions: insert and retrieve
     // k-mers from the hash table.
-    bool insert(const kmer_pair& kmer);
+    bool insert(const kmer_pair& kmer, bool end);
     bool find(const pkmer_t& key_kmer, kmer_pair& val_kmer);
 
     // Helper functions
@@ -33,11 +35,17 @@ struct HashMap {
 
     // Write and read to a logical data slot in the table.
     void write_slot(uint64_t slot, const kmer_pair& kmer);
+    void write_local_slot(uint64_t slot, const kmer_pair& kmer);
+    void write_to_stack(int node, kmer_pair local_cache[], int length);
+    void write_to_local_cache(uint64_t slot, const kmer_pair& kmer);
     kmer_pair read_slot(uint64_t slot);
 
     // Request a slot or check if it's already used.
     bool request_slot(uint64_t slot);
+    bool request_local_slot(uint64_t slot);
     bool slot_used(uint64_t slot);
+    
+    void finish_insert();
 };
 
 static int slots_per_node;
@@ -45,8 +53,10 @@ static int slots_per_node;
 HashMap::HashMap(size_t size) {
     size = (size + upcxx::rank_n() - 1) / upcxx::rank_n() * upcxx::rank_n();
     my_size = size;
-    upcxx::global_ptr<kmer_pair> local_stack = upcxx::new_array<kmer_pair>(size / upcxx::rank_n());
-    upcxx::global_ptr<int> local_stack_pointer = 0;
+    local_cache = new kmer_pair[upcxx::rank_n()][S];
+    local_cache_pointer = new int[upcxx::rank_n()];
+    local_stack = upcxx::new_array<kmer_pair>(size / upcxx::rank_n());
+    local_stack_pointer = 0;
     upcxx::global_ptr<kmer_pair> local_data = upcxx::new_array<kmer_pair>(size / upcxx::rank_n());
     upcxx::global_ptr<int> local_used = upcxx::new_array<int>(size / upcxx::rank_n());
     for (int i = 0; i < upcxx::rank_n(); i++) {
@@ -90,17 +100,11 @@ bool HashMap::insert(const kmer_pair& kmer, bool end) {
 }
 
 bool HashMap::finish_insert() {
-    clear_cache();
-    stack_to_hashtable();
-}
-
-bool HashMap::clear_cache() {
+    // clear cache
     for(int i = 0; i < upcxx::rank_n(); i++) {
         write_to_stack(i, local_cache[i], local_cache_pointer[i]);
     }
-}
-
-bool HashMap::stack_to_hashtable() {
+    // stack to hashtable
     for(int i = 0; i < local_stack_pointer; i++) {
         insert(local_stack[i], true);
     }
@@ -132,14 +136,13 @@ upcxx::global_ptr<kmer_pair> HashMap::convert_slot_to_data_address(uint64_t slot
     return data[node] + offset;
 }
 
-bool HashMap::write_to_local_cache(uint64_t slot, const kmer_pair& kmer) {
+void HashMap::write_to_local_cache(uint64_t slot, const kmer_pair& kmer) {
     int node = slot / slots_per_node;
     local_cache[node][local_cache_pointer[node]++] = kmer;
     if(local_cache_pointer[node] == S) {
         write_to_stack(node, local_cache[node], S);
         local_cache_pointer[node] = 0;
     }
-
 }
 
 void HashMap::write_to_stack(int node, kmer_pair local_cache[], int length) {
