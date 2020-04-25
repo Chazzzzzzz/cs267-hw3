@@ -13,7 +13,7 @@ struct HashMap {
     const std::vector<upcxx::atomic_op> atomic_ops = {upcxx::atomic_op::compare_exchange, upcxx::atomic_op::fetch_add};
     upcxx::atomic_domain<int>* ad = new upcxx::atomic_domain<int>(atomic_ops);
     size_t my_size;
-    kmer_pair** local_cache = new kmer_pair*[S];
+    kmer_pair** local_cache;
     int *local_cache_pointer;
     upcxx::global_ptr<kmer_pair> local_stack;
     upcxx::global_ptr<int> local_stack_pointer;
@@ -55,6 +55,7 @@ static int slots_per_node;
 HashMap::HashMap(size_t size) {
     size = (size + upcxx::rank_n() - 1) / upcxx::rank_n() * upcxx::rank_n();
     my_size = size;
+    local_cache = new kmer_pair*[upcxx::rank_n()];
     for( int i = 0; i < upcxx::rank_n(); i++) {
 	local_cache[i] = new kmer_pair[S];
     }
@@ -77,6 +78,7 @@ HashMap::~HashMap() {
 }
 
 bool HashMap::insert(kmer_pair& kmer, bool end) {
+    std::cout<< "begin insert" << std::endl;
     uint64_t hash = kmer.hash();
     uint64_t probe = 0;
     bool success = false;
@@ -84,19 +86,25 @@ bool HashMap::insert(kmer_pair& kmer, bool end) {
         uint64_t slot = (hash + probe++) % size();
         int node = slot / slots_per_node;
         if(node == upcxx::rank_me()) {
+	    std::cout << "begin insert locally" << std::endl;
             success = request_local_slot(slot);
             if(success) {
                 write_local_slot(slot, kmer);
             }
+	    std::cout << "end insert locally" << std::endl;
         } else {
             if(!end) {
+		std::cout<<"begin write_to_local_cache" << std::endl;
                 write_to_local_cache(slot, kmer);
+		std::cout<< "end write_to_local_cache"<< std::endl;
                 success = true;
             } else {
+		std::cout<< "begin normal ending insert" << std::endl;
                 success = request_slot(slot);
                 if(success) {
                     write_slot(slot, kmer);
                 }
+		std::cout<<"end normal ending insert" << std::endl;
             }
         }
     } while (!success && probe < size());
@@ -143,10 +151,16 @@ upcxx::global_ptr<kmer_pair> HashMap::convert_slot_to_data_address(uint64_t slot
 
 void HashMap::write_to_local_cache(uint64_t slot, kmer_pair& kmer) {
     int node = slot / slots_per_node;
-    local_cache[node][local_cache_pointer[node]++] = kmer;
+    std::cout<< "before local_cache" << std::endl;
+    local_cache[node][local_cache_pointer[node]] = kmer;
+    std::cout<< "mid local_cache" << std::endl;
+    local_cache_pointer[node] += 1;
+    std::cout<< "end local_cache" << std::endl;
     if(local_cache_pointer[node] == S) {
+	std::cout<<"begin call write_to_stack"<< std::endl;
         write_to_stack(node, local_cache[node], S);
         local_cache_pointer[node] = 0;
+	std::cout<< "end call write_to_stack"<< std::endl;
     }
 }
 
