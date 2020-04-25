@@ -61,7 +61,7 @@ int main(int argc, char** argv) {
 	std::vector<kmer_pair> start_nodes;
 
 	for (auto& kmer : kmers) {
-		bool success = hashmap.insert(kmer);
+		bool success = hashmap.insert(kmer, false);
 		if (!success) {
 			throw std::runtime_error("Error: HashMap is full!");
 		}
@@ -70,6 +70,9 @@ int main(int argc, char** argv) {
 			start_nodes.push_back(kmer);
 		}
 	}
+
+	hashmap.finish_insert();
+
 	auto end_insert = std::chrono::high_resolution_clock::now();
 	upcxx::barrier();
 
