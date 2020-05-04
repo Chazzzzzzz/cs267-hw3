@@ -55,23 +55,28 @@ static int slots_per_node;
 HashMap::HashMap(size_t size) {
     size = (size + upcxx::rank_n() - 1) / upcxx::rank_n() * upcxx::rank_n();
     my_size = size;
-    local_cache = new kmer_pair*[upcxx::rank_n()];
-    local_cache_pointer = new int[upcxx::rank_n()];
-    for( int i = 0; i < upcxx::rank_n(); i++) {
-	local_cache[i] = new kmer_pair[S];
-	local_cache_pointer[i] = 0;
-    }
-    local_stack = upcxx::new_array<kmer_pair>(size / upcxx::rank_n());
-    local_stack_pointer = upcxx::new_<int>(0);
     local_data = upcxx::new_array<kmer_pair>(size / upcxx::rank_n());
     local_used = upcxx::new_array<int>(size / upcxx::rank_n());
     for (int i = 0; i < upcxx::rank_n(); i++) {
-        stack.push_back(upcxx::broadcast(local_stack, i).wait());
         data.push_back(upcxx::broadcast(local_data, i).wait());
         used.push_back(upcxx::broadcast(local_used, i).wait());
-        stack_pointer.push_back(upcxx::broadcast(local_stack_pointer, i).wait());
     }
     slots_per_node = size / upcxx::rank_n();
+
+    if (upcxx::rank_n() != 1) {
+        local_cache = new kmer_pair*[upcxx::rank_n()];
+        local_cache_pointer = new int[upcxx::rank_n()];
+        for( int i = 0; i < upcxx::rank_n(); i++) {
+            local_cache[i] = new kmer_pair[S];
+            local_cache_pointer[i] = 0;
+        }
+        local_stack = upcxx::new_array<kmer_pair>(size / upcxx::rank_n());
+        local_stack_pointer = upcxx::new_<int>(0);
+        for (int i = 0; i < upcxx::rank_n(); i++) {
+            stack.push_back(upcxx::broadcast(local_stack, i).wait());
+            stack_pointer.push_back(upcxx::broadcast(local_stack_pointer, i).wait());
+        }
+    }
 }
 
 HashMap::~HashMap() {
