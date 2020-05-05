@@ -53,17 +53,9 @@ struct HashMap {
 static int slots_per_node;
 
 HashMap::HashMap(size_t size) {
-    size = (size + upcxx::rank_n() - 1) / upcxx::rank_n() * upcxx::rank_n();
-    my_size = size;
-    local_data = upcxx::new_array<kmer_pair>(size / upcxx::rank_n());
-    local_used = upcxx::new_array<int>(size / upcxx::rank_n());
-    for (int i = 0; i < upcxx::rank_n(); i++) {
-        data.push_back(upcxx::broadcast(local_data, i).wait());
-        used.push_back(upcxx::broadcast(local_used, i).wait());
-    }
-    slots_per_node = size / upcxx::rank_n();
-
-    if (upcxx::rank_n() != 1) {
+    if (upcxx::rank_n() > 1) {
+        size = (size + upcxx::rank_n() - 1) / upcxx::rank_n() * upcxx::rank_n();
+        my_size = size;
         local_cache = new kmer_pair*[upcxx::rank_n()];
         local_cache_pointer = new int[upcxx::rank_n()];
         for( int i = 0; i < upcxx::rank_n(); i++) {
@@ -72,10 +64,25 @@ HashMap::HashMap(size_t size) {
         }
         local_stack = upcxx::new_array<kmer_pair>(size / upcxx::rank_n());
         local_stack_pointer = upcxx::new_<int>(0);
+        local_data = upcxx::new_array<kmer_pair>(size / upcxx::rank_n());
+        local_used = upcxx::new_array<int>(size / upcxx::rank_n());
         for (int i = 0; i < upcxx::rank_n(); i++) {
             stack.push_back(upcxx::broadcast(local_stack, i).wait());
+            data.push_back(upcxx::broadcast(local_data, i).wait());
+            used.push_back(upcxx::broadcast(local_used, i).wait());
             stack_pointer.push_back(upcxx::broadcast(local_stack_pointer, i).wait());
         }
+        slots_per_node = size / upcxx::rank_n();
+    } else {
+        size = (size + upcxx::rank_n() - 1) / upcxx::rank_n() * upcxx::rank_n();
+        my_size = size;
+        local_data = upcxx::new_array<kmer_pair>(size / upcxx::rank_n());
+        local_used = upcxx::new_array<int>(size / upcxx::rank_n());
+        for (int i = 0; i < upcxx::rank_n(); i++) {
+            data.push_back(upcxx::broadcast(local_data, i).wait());
+            used.push_back(upcxx::broadcast(local_used, i).wait());
+        }
+        slots_per_node = size / upcxx::rank_n();
     }
 }
 
@@ -111,15 +118,17 @@ bool HashMap::insert(kmer_pair& kmer, bool end) {
 }
 
 void HashMap::finish_insert() {
-    // clear cache
-    for(int i = 0; i < upcxx::rank_n(); i++) {
-        write_to_stack(i, local_cache[i], local_cache_pointer[i]);
-    }
-    upcxx::barrier();
-    kmer_pair* local_stack_ptr = local_stack.local();
-    // stack to hashtable
-    for(int i = 0; i < *(local_stack_pointer.local()); i++) {
-        insert(local_stack_ptr[i], true);
+    if(upcxx::rank_n() > 1){
+        // clear cache
+        for(int i = 0; i < upcxx::rank_n(); i++) {
+            write_to_stack(i, local_cache[i], local_cache_pointer[i]);
+        }
+        upcxx::barrier();
+        kmer_pair* local_stack_ptr = local_stack.local();
+        // stack to hashtable
+        for(int i = 0; i < *(local_stack_pointer.local()); i++) {
+            insert(local_stack_ptr[i], true);
+        }
     }
 }
 
